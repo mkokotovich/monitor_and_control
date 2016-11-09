@@ -4,7 +4,8 @@ from flask_socketio import SocketIO, Namespace, emit, join_room, leave_room, \
     close_room, rooms, disconnect
 from cloudinary.uploader import upload
 from cloudinary.utils import cloudinary_url
-import urllib
+import urllib2
+import datetime
 
 # Set this variable to "threading", "eventlet" or "gevent" to test the
 # different async modes, or leave it set to None for the application to choose
@@ -19,18 +20,28 @@ thread = None
 camera_server = "http://192.168.86.106:8080"
 image_number = 0
 filename = "images/image_latest.jpg"
+last_image_url = ""
 
 def refresh_image(filename):
     # TODO: limit refresh to a certain rate
+    global last_image_url
     # Grab the latest frame from the camera
-    urllib.urlretrieve("{}{}".format(camera_server, "/photo.jpg"), filename)
-    # Upload the image to the cloud
-    upload_result = upload(filename)
-    if upload_result:
-        image_url = upload_result['url']
-    else:
-        image_url = None
-    # Return the url of the new image
+    try:
+        request = urllib2.urlopen(camera_server + "/photo.jpg", timeout=10)
+        with open(filename, 'wb') as f:
+            f.write(request.read())
+        # Upload the image to the cloud
+        upload_result = upload(filename)
+        if upload_result:
+            # If the upload was successful, save the result in last_image_url
+            image_url = upload_result['url']
+            last_image_url = image_url
+        else:
+            image_url = last_image_url
+    except Exception as e:
+        print "Failed to refresh image " + str(e)
+        image_url = last_image_url
+
     return image_url
 
 
@@ -41,8 +52,8 @@ def background_thread():
         socketio.sleep(15)
         img_url = refresh_image(filename)
         socketio.emit('picture_update',
-            {'source': img_url},
-            namespace='')
+                {'source': img_url, 'picture_msg': "Last update: {}".format(datetime.datetime.now().strftime('%H:%M:%S'))},
+                namespace='')
 
 
 @app.route('/')
@@ -55,12 +66,14 @@ class MyNamespace(Namespace):
     def on_update_request(self):
         img_url = refresh_image(filename) #add force=True
         emit('picture_update',
-            {'source': img_url})
+            {'source': img_url,
+             'picture_msg': "Last update: {}".format(datetime.datetime.now().strftime('%H:%M:%S'))})
 
     def on_connect(self):
         img_url = refresh_image(filename)
         emit('picture_update',
-            {'source': img_url})
+            {'source': img_url,
+             'picture_msg': "Last update: {}".format(datetime.datetime.now().strftime('%H:%M:%S'))})
         global thread
         if thread is None:
             thread = socketio.start_background_task(target=background_thread)

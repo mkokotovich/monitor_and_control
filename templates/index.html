@@ -27,10 +27,12 @@
             });
 
             socket.on('my_response', function(msg) {
-                $('#log').append('<br>' + $('<div/>').text('Received #' + msg.count + ': ' + msg.data).html());
+                //$('#log').append('<br>' + $('<div/>').text('Received #' + msg.count + ': ' + msg.data).html());
             });
             socket.on('picture_update', function(msg) {
                 $("#picture").attr('src', msg.source);
+                //$('#picture_msg').append('<br>' + $('<div/>').text(msg.picture_msg).html());
+                $('#picture_msg').html($('<div/>').text(msg.picture_msg).html());
             });
 
             $('form#update-picture').submit(function(event) {
@@ -48,7 +50,7 @@
     <br>
     <img id="picture" src="" />
     <br>
-    <h2>Receive:</h2>
+    <div id="picture_msg"></div>
     <div id="log"></div>
 </body>
 </html>
