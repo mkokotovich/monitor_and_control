@@ -21,6 +21,7 @@ camera_server = "http://192.168.86.106:8080"
 image_number = 0
 filename = "images/image_latest.jpg"
 last_image_url = ""
+last_update_time = "never"
 
 def refresh_image(filename):
     # TODO: limit refresh to a certain rate
@@ -36,6 +37,7 @@ def refresh_image(filename):
             # If the upload was successful, save the result in last_image_url
             image_url = upload_result['url']
             last_image_url = image_url
+            last_update_time = datetime.datetime.now().strftime('%H:%M:%S')
         else:
             image_url = last_image_url
     except Exception as e:
@@ -52,7 +54,7 @@ def background_thread():
         socketio.sleep(15)
         img_url = refresh_image(filename)
         socketio.emit('picture_update',
-                {'source': img_url, 'picture_msg': "Last update: {}".format(datetime.datetime.now().strftime('%H:%M:%S'))},
+                {'source': img_url, 'picture_msg': "Last update: " + last_update_time},
                 namespace='')
 
 
@@ -64,16 +66,31 @@ def index():
 class MyNamespace(Namespace):
 
     def on_update_request(self):
+        global last_image_url
+        global last_update_time
         img_url = refresh_image(filename) #add force=True
         emit('picture_update',
             {'source': img_url,
-             'picture_msg': "Last update: {}".format(datetime.datetime.now().strftime('%H:%M:%S'))})
+             'picture_msg': "Last update: " + last_update_time})
+
+    def on_turn_off_request(self):
+        emit('toggle_result',
+            {'status': "success",
+             'operation': "turn off",
+             'status_msg': "Successfully turned off light, image will auto-update"})
+
+    def on_turn_on_request(self):
+        emit('toggle_result',
+            {'status': "success",
+             'operation': "turn on",
+             'status_msg': "Successfully turned on light, image will auto-update"})
 
     def on_connect(self):
-        img_url = refresh_image(filename)
+        global last_image_url
+        global last_update_time
         emit('picture_update',
-            {'source': img_url,
-             'picture_msg': "Last update: {}".format(datetime.datetime.now().strftime('%H:%M:%S'))})
+            {'source': last_image_url,
+             'picture_msg': "Last update: " + last_update_time})
         global thread
         if thread is None:
             thread = socketio.start_background_task(target=background_thread)
