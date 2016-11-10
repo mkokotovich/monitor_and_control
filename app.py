@@ -20,7 +20,7 @@ thread = None
 camera_server = "http://192.168.86.106:8080"
 image_number = 0
 filename = "images/image_latest.jpg"
-last_image_url = ""
+last_image_url = "http://res.cloudinary.com/cloudmedia/image/upload/v1478798030/stream-unavailable.jpg"
 last_update_time = "never"
 
 def refresh_image(filename):
