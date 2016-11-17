@@ -17,44 +17,51 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, async_mode=async_mode)
 thread = None
-camera_server = "http://192.168.86.106:8080"
-image_number = 0
-filename = "images/image_latest.jpg"
-last_image_url = "http://res.cloudinary.com/cloudmedia/image/upload/v1478798030/stream-unavailable.jpg"
-last_update_time = "never"
-
-def refresh_image(filename):
-    # TODO: limit refresh to a certain rate
-    global last_image_url
-    # Grab the latest frame from the camera
-    try:
-        request = urllib2.urlopen(camera_server + "/photo.jpg", timeout=10)
-        with open(filename, 'wb') as f:
-            f.write(request.read())
-        # Upload the image to the cloud
-        upload_result = upload(filename)
-        if upload_result:
-            # If the upload was successful, save the result in last_image_url
-            image_url = upload_result['url']
-            last_image_url = image_url
-            last_update_time = datetime.datetime.now().strftime('%H:%M:%S')
-        else:
-            image_url = last_image_url
-    except Exception as e:
-        print "Failed to refresh image " + str(e)
-        image_url = last_image_url
-
-    return image_url
 
 
-def background_thread():
+class ImageUpdater:
+    filename = "images/image_latest.jpg"
+    camera_server = "http://192.168.86.106:8080"
+    last_image_url = "http://res.cloudinary.com/cloudmedia/image/upload/v1478798030/stream-unavailable.jpg"
+    last_update_time = "never"
+
+    def __init__(self):
+        self.last_image_url = "http://res.cloudinary.com/cloudmedia/image/upload/v1478798030/stream-unavailable.jpg"
+        self.last_update_time = "never"
+        self.camera_server = "http://192.168.86.106:8080"
+        self.filename = "images/image_latest.jpg"
+
+    def refresh_image(self):
+        image_url = self.last_image_url
+        # TODO: limit refresh to a certain rate
+        try:
+            # Grab the latest frame from the camera
+            request = urllib2.urlopen(self.camera_server + "/photo.jpg", timeout=10)
+            with open(self.filename, 'wb') as f:
+                f.write(request.read())
+            # Upload the image to the cloud
+            upload_result = upload(self.filename)
+            if upload_result:
+                # If the upload was successful, save the result in last_image_url
+                image_url = upload_result['url']
+                self.last_image_url = image_url
+                self.last_update_time = datetime.datetime.now().strftime('%H:%M:%S')
+            else:
+                image_url = self.last_image_url
+        except Exception as e:
+            print "Failed to refresh image " + str(e)
+            image_url = self.last_image_url
+        return image_url
+
+
+def background_thread(imageUpdater):
     """Example of how to send server generated events to clients."""
     count = 0
     while True:
         socketio.sleep(15)
-        img_url = refresh_image(filename)
+        img_url = imageUpdater.refresh_image()
         socketio.emit('picture_update',
-                {'source': img_url, 'picture_msg': "Last update: " + last_update_time},
+                {'source': img_url, 'picture_msg': "Last update: " + imageUpdater.last_update_time},
                 namespace='')
 
 
@@ -64,11 +71,16 @@ def index():
 
 
 class MyNamespace(Namespace):
+    imageUpdater = None
+
+    def __init__(self, ns, imageUpdater):
+        super(MyNamespace, self).__init__(ns)
+        self.imageUpdater = imageUpdater
 
     def on_update_request(self):
         global last_image_url
         global last_update_time
-        img_url = refresh_image(filename) #add force=True
+        img_url = self.imageUpdater.refresh_image() #add force=True
         emit('picture_update',
             {'source': img_url,
              'picture_msg': "Last update: " + last_update_time})
@@ -86,17 +98,17 @@ class MyNamespace(Namespace):
              'status_msg': "Successfully turned on light, image will auto-update"})
 
     def on_connect(self):
-        global last_image_url
-        global last_update_time
         emit('picture_update',
-            {'source': last_image_url,
-             'picture_msg': "Last update: " + last_update_time})
+            {'source': self.imageUpdater.last_image_url,
+             'picture_msg': "Last update: " + self.imageUpdater.last_update_time})
         global thread
         if thread is None:
-            thread = socketio.start_background_task(target=background_thread)
+            thread = socketio.start_background_task(target=background_thread, imageUpdater=self.imageUpdater)
 
 
-socketio.on_namespace(MyNamespace(''))
+imageUpdater = ImageUpdater()
+
+socketio.on_namespace(MyNamespace(ns='', imageUpdater=imageUpdater))
 
 
 if __name__ == '__main__':
