@@ -17,16 +17,65 @@ page_title = "Control the Lights"
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, async_mode=async_mode)
-thread = None
+background_image = None
+background_arduino = None
+
+class ArduinoManagement:
+    def __init__(self):
+        self.arduino_url = "http://192.168.86.111"
+
+    def callRestAPI(self, url_string):
+        request = urllib2.urlopen(self.arduino_url + "/" + url_string, timeout=10)
+        response = request.read()
+        print "~~~ArduinoManagement~~~ rest api " + url_string + " response: " + response
+
+    def powerOn(self):
+        self.callRestAPI("powerOn")
+
+    def powerOff(self):
+        self.callRestAPI("powerOff")
+
+
+def arduino_manager_thread(threadArduinoManager, action):
+    print "---arduino thread---: Calling callRestAPI"
+    threadArduinoManager.callRestAPI(action);
+
+
+def background_arduino_manager(**kwargs):
+    backgroundArduinoPowerOnEvent = kwargs["backgroundArduinoPowerOnEvent"]
+    backgroundArduinoPowerOffEvent = kwargs["backgroundArduinoPowerOffEvent"]
+    backgroundArduinoManager = kwargs["backgroundArduinoManager"]
+    backgroundUpdateEvent = kwargs["backgroundUpdateEvent"]
+
+    print "---background---: background_arduino_manager started"
+    while True:
+        # Wait time_to_wait_before_refresh seconds or until someone calls backgroundArduinoPowerOn/OffEvent.set()
+        action = ""
+        while not backgroundArduinoPowerOnEvent.is_set() and not backgroundArduinoPowerOffEvent.is_set():
+            socketio.sleep(1)
+        if backgroundArduinoPowerOnEvent.is_set():
+            backgroundArduinoPowerOnEvent.clear()
+            action = "powerOn"
+        elif backgroundArduinoPowerOffEvent.is_set():
+            backgroundArduinoPowerOffEvent.clear()
+            action = "powerOff"
+        print "---background---: handling arduino manager event"
+        # Handle event in a new thread, so the UI still responds
+        arduino_thread = threading.Thread(target=arduino_manager_thread, args = (backgroundArduinoManager, action, ))
+        arduino_thread.start()
+        while arduino_thread.is_alive():
+            socketio.sleep(1)
+        arduino_thread.join()
+        # Update client
+        socketio.emit('toggle_result',
+            {'status': "success",
+             'operation': action,
+             'status_msg': "Successfully turned " + ( "off" if action == "powerOff" else "on" ) + " light, image will auto-update"})
+        # And now signal the image to be updated
+        backgroundUpdateEvent.set()
+
 
 class ImageUpdater:
-    filename = "images/image_latest.jpg"
-    camera_server = "http://192.168.86.106:8080"
-    last_image_url = "http://res.cloudinary.com/cloudmedia/image/upload/v1478798030/stream-unavailable.jpg"
-    last_update_time = "never"
-    last_refresh_attempt = datetime.datetime.min
-    refresh_interval = datetime.timedelta(seconds=10)
-
     def __init__(self):
         self.last_image_url = "http://res.cloudinary.com/cloudmedia/image/upload/v1478798030/stream-unavailable.jpg"
         self.last_update_time = "never"
@@ -57,7 +106,7 @@ class ImageUpdater:
 
 
 def image_refresh_thread(threadImageUpdater):
-    print "---thread---: Calling refresh_image"
+    print "---image thread---: Calling refresh_image"
     threadImageUpdater.refresh_image()
 
 
@@ -77,11 +126,11 @@ def background_image_updater(**kwargs):
         # Clear event right away, so if another set comes in we catch it
         backgroundUpdateEvent.clear()
         # Update the image in a new thread, so the UI still responds
-        thread = threading.Thread(target=image_refresh_thread, args = (backgroundImageUpdater, ))
-        thread.start()
-        while thread.is_alive():
+        image_thread = threading.Thread(target=image_refresh_thread, args = (backgroundImageUpdater, ))
+        image_thread.start()
+        while image_thread.is_alive():
             socketio.sleep(1)
-        thread.join()
+        image_thread.join()
         socketio.emit('picture_update',
                 {'source': backgroundImageUpdater.last_image_url, 'picture_msg': "Last update: " + backgroundImageUpdater.last_update_time},
                 namespace='')
@@ -93,13 +142,14 @@ def index():
 
 
 class MyNamespace(Namespace):
-    imageUpdater = None
-    updateEvent = None
 
-    def __init__(self, ns, nsImageUpdater, nsUpdateEvent):
+    def __init__(self, ns, nsImageUpdater, nsUpdateEvent, nsArduinoManager, nsArduinoPowerOnEvent, nsArduinoPowerOffEvent):
         super(MyNamespace, self).__init__(ns)
         self.imageUpdater = nsImageUpdater
         self.updateEvent = nsUpdateEvent
+        self.arduinoManager = nsArduinoManager
+        self.arduinoPowerOnEvent = nsArduinoPowerOnEvent
+        self.arduinoPowerOffEvent = nsArduinoPowerOffEvent
 
     def on_update_request(self):
         self.updateEvent.set()
@@ -109,36 +159,44 @@ class MyNamespace(Namespace):
              'picture_msg': "Last update: " + self.imageUpdater.last_update_time})
 
     def on_turn_off_request(self):
-        self.updateEvent.set()
-        emit('toggle_result',
-            {'status': "success",
-             'operation': "turn off",
-             'status_msg': "Successfully turned off light, image will auto-update"})
+        print "Power Off request received, signaling thread"
+        self.arduinoPowerOffEvent.set()
 
     def on_turn_on_request(self):
-        self.updateEvent.set()
-        emit('toggle_result',
-            {'status': "success",
-             'operation': "turn on",
-             'status_msg': "Successfully turned on light, image will auto-update"})
+        print "Power On request received, signaling thread"
+        self.arduinoPowerOnEvent.set()
 
     def on_connect(self):
         emit('picture_update',
             {'source': self.imageUpdater.last_image_url,
              'picture_msg': "Last update: " + self.imageUpdater.last_update_time})
-        global thread
-        if thread is None:
-            print "Starting thread"
-            thread = socketio.start_background_task(target=background_image_updater, backgroundImageUpdater=self.imageUpdater, backgroundUpdateEvent=self.updateEvent)
+        global background_image
+        global background_arduino
+        if background_image is None:
+            print "Starting background_image"
+            background_image = socketio.start_background_task(
+                    target=background_image_updater,
+                    backgroundImageUpdater=self.imageUpdater,
+                    backgroundUpdateEvent=self.updateEvent)
+        if background_arduino is None:
+            print "Starting background_arduino"
+            background_arduino = socketio.start_background_task(
+                    target=background_arduino_manager,
+                    backgroundArduinoManager=self.arduinoManager,
+                    backgroundArduinoPowerOffEvent=self.arduinoPowerOffEvent,
+                    backgroundArduinoPowerOnEvent=self.arduinoPowerOnEvent,
+                    backgroundUpdateEvent=self.updateEvent)
         self.updateEvent.set()
 
 
-g_imageUpdater = ImageUpdater()
-g_updateEvent = threading.Event()
-
-socketio.on_namespace(MyNamespace(ns='', nsImageUpdater=g_imageUpdater, nsUpdateEvent=g_updateEvent))
-
-
 if __name__ == '__main__':
+
+    socketio.on_namespace(MyNamespace(ns='',
+        nsImageUpdater=ImageUpdater(),
+        nsUpdateEvent=threading.Event(),
+        nsArduinoManager=ArduinoManagement(),
+        nsArduinoPowerOnEvent=threading.Event(),
+        nsArduinoPowerOffEvent=threading.Event()))
+
     socketio.run(app, debug=True, host="0.0.0.0", port=8080)
 
