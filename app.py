@@ -7,6 +7,8 @@ from cloudinary.utils import cloudinary_url
 import urllib2
 import datetime
 import threading
+import base64
+import socket
 
 # Set this variable to "threading", "eventlet" or "gevent" to test the
 # different async modes, or leave it set to None for the application to choose
@@ -22,10 +24,10 @@ background_arduino = None
 
 class ArduinoManagement:
     def __init__(self):
-        self.arduino_url = "http://192.168.86.111"
+        self.arduino_url = "http://192.168.86.168"
 
     def callRestAPI(self, url_string):
-        request = urllib2.urlopen(self.arduino_url + "/" + url_string, timeout=10)
+        request = urllib2.urlopen(self.arduino_url + "/" + url_string, timeout=5)
         response = request.read()
         print "~~~ArduinoManagement~~~ rest api " + url_string + " response: " + response
 
@@ -79,7 +81,7 @@ class ImageUpdater:
     def __init__(self):
         self.last_image_url = "http://res.cloudinary.com/cloudmedia/image/upload/v1478798030/stream-unavailable.jpg"
         self.last_update_time = "never"
-        self.camera_server = "http://192.168.86.106:8080"
+        self.camera_server = "http://192.168.86.113:8080"
         self.filename = "images/image_latest.jpg"
         self.last_refresh_attempt = datetime.datetime.min
         self.refresh_interval = datetime.timedelta(seconds=5)
@@ -90,19 +92,40 @@ class ImageUpdater:
             # Return right away if we need to wait longer
             return
         self.last_refresh_attempt = datetime.datetime.now()
-        try:
-            # Grab the latest frame from the camera
-            request = urllib2.urlopen(self.camera_server + "/photo.jpg", timeout=10)
-            with open(self.filename, 'wb') as f:
-                f.write(request.read())
-            # Upload the image to the cloud
-            upload_result = upload(self.filename)
-            if upload_result:
-                # If the upload was successful, save the result in last_image_url
-                self.last_image_url = upload_result['url']
-                self.last_update_time = datetime.datetime.now().strftime('%H:%M:%S')
-        except Exception as e:
-            print "+++ImageUpdater+++: Failed to refresh image " + str(e)
+        attempt_num = 0
+        max_attempts = 3
+        success = False
+        while attempt_num < max_attempts and success == False:
+            attempt_num += 1
+            try:
+                # Grab the latest frame from the camera
+                print "+++ImageUpdater+++: Opening request"
+                request = urllib2.urlopen(self.camera_server + "/photo.jpg", timeout=3)
+                print "+++ImageUpdater+++: Reading request"
+                data = request.read()
+                print "+++ImageUpdater+++: Encoding  request"
+                encoded_str = base64.b64encode(data)
+                print "+++ImageUpdater+++: Closing request"
+                request.close()
+                success = True
+            except Exception as e:
+                print "+++ImageUpdater+++: Image read attempt {} failed: ".format(attempt_num) + str(e)
+        if not success:
+            print "+++ImageUpdater+++: Failed to read new image"
+        else:
+            try:
+                # Upload the image to the cloud
+                print "+++ImageUpdater+++: Uploading request"
+                upload_result = upload("data:image/jpg;base64," + encoded_str)
+                print "+++ImageUpdater+++: upload returned"
+                if upload_result:
+                    # If the upload was successful, save the result in last_image_url
+                    self.last_image_url = upload_result['url']
+                    self.last_update_time = datetime.datetime.now().strftime('%H:%M:%S')
+            except Exception as e:
+                print "+++ImageUpdater+++: Failed to upload image to cloud: " + str(e)
+                success = False
+        return success
 
 
 def image_refresh_thread(threadImageUpdater):
@@ -114,7 +137,7 @@ def background_image_updater(**kwargs):
     backgroundUpdateEvent = kwargs["backgroundUpdateEvent"]
     backgroundImageUpdater = kwargs["backgroundImageUpdater"]
 
-    time_to_wait_before_refresh = 15
+    time_to_wait_before_refresh = 60
     print "---background---: background_image_updater started"
     while True:
         # Wait time_to_wait_before_refresh seconds or until someone calls backgroundUpdateEvent.set()
@@ -154,9 +177,6 @@ class MyNamespace(Namespace):
     def on_update_request(self):
         self.updateEvent.set()
         print "Update request received, signaled thread for update"
-        emit('picture_update',
-            {'source': self.imageUpdater.last_image_url,
-             'picture_msg': "Last update: " + self.imageUpdater.last_update_time})
 
     def on_turn_off_request(self):
         print "Power Off request received, signaling thread"
