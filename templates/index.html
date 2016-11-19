@@ -95,7 +95,11 @@
           padding: 20px;
           margin: 0px;
         }
-        .alert {display:inline-block;}
+        .alert {
+            display:inline-block;
+            position: fixed;
+            top: 10px;
+        }
         .picture_msg {
             font-style:italic;
             font-size:80%;
@@ -113,7 +117,9 @@
     <img height="240" width="320" id="picture" src="" />
     <br>
     <div class="picture_msg" id="picture_msg"></div>
-    <button id="update-picture" type="button" class="btn btn-primary">Update Picture</button>
+    <div id="bottom-button">
+        <button id="update-picture" type="button" class="btn btn-primary">Update Picture</button>
+    </div>
     <div id="log"></div>
 
 </body>

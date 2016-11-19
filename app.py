@@ -27,15 +27,24 @@ class ArduinoManagement:
         self.arduino_url = "http://192.168.86.168"
 
     def callRestAPI(self, url_string):
-        request = urllib2.urlopen(self.arduino_url + "/" + url_string, timeout=5)
-        response = request.read()
-        print "~~~ArduinoManagement~~~ rest api " + url_string + " response: " + response
+        success = False
+        try:
+            request = urllib2.urlopen(self.arduino_url + "/" + url_string, timeout=5)
+            response = request.read()
+            print "~~~ArduinoManagement~~~ rest api " + url_string + " response: " + response
+            success = True
+        except OSError as e:
+            print "~~~ArduinoManagement~~~: REST API failed: {}".format(str(e))
+        except Exception as e:
+            print "~~~ArduinoManagement~~~: REST API failed: {}".format(str(e))
+        return success
+
 
     def powerOn(self):
-        self.callRestAPI("powerOn")
+        return self.callRestAPI("powerOn")
 
     def powerOff(self):
-        self.callRestAPI("powerOff")
+        return self.callRestAPI("powerOff")
 
 
 def arduino_manager_thread(threadArduinoManager, action):
@@ -108,6 +117,8 @@ class ImageUpdater:
                 print "+++ImageUpdater+++: Closing request"
                 request.close()
                 success = True
+            except OSError as e:
+                print "+++ImageUpdater+++: Image read attempt {} failed: ".format(attempt_num) + str(e)
             except Exception as e:
                 print "+++ImageUpdater+++: Image read attempt {} failed: ".format(attempt_num) + str(e)
         if not success:
